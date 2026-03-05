@@ -16,6 +16,7 @@ export default async function handler(request: Request) {
   try {
     const response = await fetch(targetUrl, {
       headers: { "User-Agent": request.headers.get("user-agent") || "" },
+      redirect: "follow",
     });
 
     // Copy headers, stripping frame-blocking ones
@@ -29,11 +30,16 @@ export default async function handler(request: Request) {
     }
 
     const contentType = response.headers.get("content-type") || "";
+    // Use final URL origin (after redirects) for the base tag
+    const finalOrigin = response.url ? new URL(response.url).origin : targetOrigin;
 
-    // For HTML responses, inject a <base> tag so relative URLs resolve correctly
+    // For HTML responses, fix <base> tag so relative URLs resolve correctly
     if (contentType.includes("text/html")) {
       let html = await response.text();
-      const baseTag = `<base href="${targetOrigin}/">`;
+      const baseTag = `<base href="${finalOrigin}/">`;
+
+      // Remove any existing <base> tags first
+      html = html.replace(/<base[^>]*>/gi, "");
 
       if (/<head[\s>]/i.test(html)) {
         html = html.replace(/<head([\s>])/i, "<head$1" + baseTag);
