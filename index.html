@@ -80,6 +80,11 @@
     <option value="0">None (landscape)</option>
   </select>
 
+  <label style="margin-top:14px">
+    <input type="checkbox" id="use-proxy" checked>
+    Use proxy (fixes sites that block iframes)
+  </label>
+
   <label>Pages</label>
   <div id="entries"></div>
   <button type="button" id="add-btn">+ Add page</button>
@@ -89,7 +94,7 @@
   <button id="start-btn">Start</button>
 </div>
 
-<iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+<iframe id="frame"></iframe>
 <div id="bar"></div>
 
 <script>
@@ -140,6 +145,7 @@
   function saveConfig() {
     var data = {
       rotation: document.getElementById('rotation').value,
+      useProxy: document.getElementById('use-proxy').checked,
       pages: readEntries()
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -150,12 +156,22 @@
       var data = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (!data) return false;
       if (data.rotation) document.getElementById('rotation').value = data.rotation;
+      if (typeof data.useProxy === 'boolean') document.getElementById('use-proxy').checked = data.useProxy;
       if (data.pages && data.pages.length) {
         data.pages.forEach(function(p) { createEntry(p.url, p.mins); });
         return true;
       }
     } catch(e) {}
     return false;
+  }
+
+  function frameSrc(url) {
+    var useProxy = document.getElementById('use-proxy').checked;
+    var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (useProxy && !isLocal) {
+      return '/proxy?url=' + encodeURIComponent(url);
+    }
+    return url;
   }
 
   function start() {
@@ -174,7 +190,7 @@
 
   function show() {
     var page = pages[idx];
-    document.getElementById('frame').src = page.url;
+    document.getElementById('frame').src = frameSrc(page.url);
     var ms = page.mins * 60000;
 
     var bar = document.getElementById('bar');
@@ -221,9 +237,10 @@
 
   // Init: load from localStorage or show default
   if (!loadConfig()) {
-    createEntry('https://thewolfondchair.ca&kiosk', 5);
-    createEntry('https://humanfactors.ca', 5);
-    createEntry('https://centrefordigitaltherapeutics.ca', 5);
+    createEntry('https://thewolfondchair.ca/wolfond-report-2024-2026.html?kiosk', 0.25);
+    createEntry('https://humanfactors.ca', 0.25);
+    createEntry('https://centrefordigitaltherapeutics.ca', 0.25);
+    createEntry('https://uhn.ca', 0.25);
   }
 </script>
 </body>
