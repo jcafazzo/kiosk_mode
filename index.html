@@ -11,9 +11,11 @@
     position: absolute;
     top: 50%; left: 50%;
     width: 100vh; height: 100vw;
-    transform: translate(-50%, -50%) rotate(90deg);
     border: none;
   }
+  #frame.rot90  { transform: translate(-50%, -50%) rotate(90deg); }
+  #frame.rot-90 { transform: translate(-50%, -50%) rotate(-90deg); }
+  #frame.rot0   { transform: translate(-50%, -50%); width: 100vw; height: 100vh; }
 
   #config {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -21,19 +23,15 @@
     font-family: system-ui, sans-serif;
     padding: 40px; overflow-y: auto; z-index: 10;
   }
-  #config h1 { margin-bottom: 20px; font-size: 1.4em; }
-  #config label { display: block; margin: 12px 0 4px; font-size: 0.9em; color: #aaa; }
-  #config textarea {
-    width: 100%; max-width: 600px; height: 160px;
+  #config h1 { margin-bottom: 8px; font-size: 1.4em; }
+  #config .subtitle { color: #888; font-size: 0.85em; margin-bottom: 20px; }
+  #config label { display: block; margin: 14px 0 4px; font-size: 0.9em; color: #aaa; }
+  #config select, #config input[type=number] {
     background: #16213e; color: #eee; border: 1px solid #444;
-    border-radius: 4px; padding: 10px; font-family: monospace; font-size: 0.9em;
-    resize: vertical;
+    border-radius: 4px; padding: 6px 10px; font-size: 1em;
   }
-  #config input[type=number] {
-    width: 80px; background: #16213e; color: #eee;
-    border: 1px solid #444; border-radius: 4px; padding: 6px 10px;
-    font-size: 1em;
-  }
+  #config select { width: 160px; }
+  #config input[type=number] { width: 80px; }
   #config button {
     margin-top: 20px; padding: 10px 28px;
     background: #0f3460; color: #eee; border: none;
@@ -41,6 +39,27 @@
   }
   #config button:hover { background: #1a5276; }
   .hint { font-size: 0.8em; color: #666; margin-top: 4px; }
+
+  #entries { width: 100%; max-width: 700px; margin-top: 8px; }
+  .entry {
+    display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
+  }
+  .entry input[type=url] {
+    flex: 1; background: #16213e; color: #eee; border: 1px solid #444;
+    border-radius: 4px; padding: 8px 10px; font-family: monospace; font-size: 0.9em;
+  }
+  .entry input[type=number] { width: 70px; }
+  .entry .remove-btn {
+    background: #5a2020; color: #ccc; border: none; border-radius: 4px;
+    padding: 6px 10px; cursor: pointer; font-size: 0.9em;
+  }
+  .entry .remove-btn:hover { background: #7a2020; }
+  #add-btn {
+    margin-top: 6px; padding: 6px 16px;
+    background: #1a3a2e; color: #aaa; border: 1px dashed #444;
+    border-radius: 4px; cursor: pointer; font-size: 0.85em;
+  }
+  #add-btn:hover { background: #1a4a3e; color: #eee; }
 
   #bar {
     position: fixed; bottom: 0; left: 0; height: 3px;
@@ -52,60 +71,158 @@
 
 <div id="config">
   <h1>Portrait Kiosk</h1>
-  <label>URLs (one per line)</label>
-  <textarea id="urls">https://example.com
-https://www.wikipedia.org</textarea>
-  <label>Rotate (minutes per page)</label>
-  <input type="number" id="interval" value="5" min="0.1" step="0.5">
-  <p class="hint">Press Escape at any time to return to this screen.</p>
+  <p class="subtitle">Rotate web pages and cycle through them on a timer.</p>
+
+  <label>Rotation</label>
+  <select id="rotation">
+    <option value="90">+90 (clockwise)</option>
+    <option value="-90">-90 (counter-clockwise)</option>
+    <option value="0">None (landscape)</option>
+  </select>
+
+  <label>Pages</label>
+  <div id="entries"></div>
+  <button type="button" id="add-btn">+ Add page</button>
+
+  <p class="hint" style="margin-top:16px">Press <b>Escape</b> or <b>triple-click</b> anywhere to return to this screen.</p>
   <br>
-  <button onclick="start()">Start</button>
+  <button id="start-btn">Start</button>
 </div>
 
 <iframe id="frame" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
 <div id="bar"></div>
 
 <script>
-  let urls = [], idx = 0, timer = null, barTimer = null;
+  const STORAGE_KEY = 'kiosk_config';
+  let pages = [], idx = 0, timer = null;
+
+  function createEntry(url, mins) {
+    const row = document.createElement('div');
+    row.className = 'entry';
+
+    const urlInput = document.createElement('input');
+    urlInput.type = 'url';
+    urlInput.placeholder = 'https://example.com';
+    urlInput.value = url;
+
+    const minsInput = document.createElement('input');
+    minsInput.type = 'number';
+    minsInput.value = mins;
+    minsInput.min = '0.1';
+    minsInput.step = '0.5';
+    minsInput.title = 'Minutes';
+
+    const minLabel = document.createTextNode(' min ');
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.title = 'Remove';
+    removeBtn.textContent = 'X';
+    removeBtn.addEventListener('click', function() { row.remove(); });
+
+    row.appendChild(urlInput);
+    row.appendChild(minsInput);
+    row.appendChild(minLabel);
+    row.appendChild(removeBtn);
+    document.getElementById('entries').appendChild(row);
+  }
+
+  function readEntries() {
+    const rows = document.querySelectorAll('.entry');
+    return Array.from(rows).map(function(r) {
+      return {
+        url: r.querySelector('input[type=url]').value.trim(),
+        mins: parseFloat(r.querySelector('input[type=number]').value) || 5
+      };
+    }).filter(function(e) { return e.url; });
+  }
+
+  function saveConfig() {
+    var data = {
+      rotation: document.getElementById('rotation').value,
+      pages: readEntries()
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function loadConfig() {
+    try {
+      var data = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      if (!data) return false;
+      if (data.rotation) document.getElementById('rotation').value = data.rotation;
+      if (data.pages && data.pages.length) {
+        data.pages.forEach(function(p) { createEntry(p.url, p.mins); });
+        return true;
+      }
+    } catch(e) {}
+    return false;
+  }
 
   function start() {
-    const raw = document.getElementById('urls').value.trim();
-    urls = raw.split('\n').map(u => u.trim()).filter(Boolean);
-    if (!urls.length) return alert('Add at least one URL.');
+    pages = readEntries();
+    if (!pages.length) return alert('Add at least one page.');
+    saveConfig();
     document.getElementById('config').style.display = 'none';
+
+    var rot = document.getElementById('rotation').value;
+    var frame = document.getElementById('frame');
+    frame.className = 'rot' + rot;
+
     idx = 0;
     show();
   }
 
   function show() {
-    document.getElementById('frame').src = urls[idx];
-    const mins = parseFloat(document.getElementById('interval').value) || 5;
-    const ms = mins * 60000;
+    var page = pages[idx];
+    document.getElementById('frame').src = page.url;
+    var ms = page.mins * 60000;
 
-    // progress bar
-    const bar = document.getElementById('bar');
+    var bar = document.getElementById('bar');
     bar.style.transition = 'none';
     bar.style.width = '0%';
-    requestAnimationFrame(() => {
-      bar.style.transition = `width ${ms}ms linear`;
+    requestAnimationFrame(function() {
+      bar.style.transition = 'width ' + ms + 'ms linear';
       bar.style.width = '100%';
     });
 
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      idx = (idx + 1) % urls.length;
+    timer = setTimeout(function() {
+      idx = (idx + 1) % pages.length;
       show();
     }, ms);
   }
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      clearTimeout(timer);
-      document.getElementById('config').style.display = '';
-      document.getElementById('frame').src = 'about:blank';
-      document.getElementById('bar').style.width = '0%';
-    }
+  function exitKiosk() {
+    clearTimeout(timer);
+    document.getElementById('config').style.display = '';
+    document.getElementById('frame').src = 'about:blank';
+    document.getElementById('frame').className = '';
+    document.getElementById('bar').style.width = '0%';
+  }
+
+  // Exit: Escape key
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') exitKiosk();
   });
+
+  // Exit: Triple-click
+  var clickCount = 0, clickTimer = null;
+  document.addEventListener('click', function() {
+    if (document.getElementById('config').style.display !== 'none') return;
+    clickCount++;
+    clearTimeout(clickTimer);
+    if (clickCount >= 3) { clickCount = 0; exitKiosk(); return; }
+    clickTimer = setTimeout(function() { clickCount = 0; }, 600);
+  });
+
+  // Buttons
+  document.getElementById('add-btn').addEventListener('click', function() { createEntry('', 5); });
+  document.getElementById('start-btn').addEventListener('click', start);
+
+  // Init: load from localStorage or show default
+  if (!loadConfig()) {
+    createEntry('https://example.com', 5);
+  }
 </script>
 </body>
 </html>
