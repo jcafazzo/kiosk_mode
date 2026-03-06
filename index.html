@@ -57,11 +57,16 @@
   .entry {
     display: flex; gap: 8px; align-items: center; margin-bottom: 6px;
   }
-  .entry input[type=url] {
+  .entry input[type=text] {
     flex: 1; background: #16213e; color: #eee; border: 1px solid #444;
     border-radius: 4px; padding: 8px 10px; font-family: monospace; font-size: 0.9em;
   }
   .entry input[type=number] { width: 70px; }
+  .entry .proxy-label {
+    font-size: 0.75em; color: #666; display: flex; align-items: center; gap: 2px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .entry .proxy-label input { margin: 0; }
   .entry .remove-btn {
     background: #5a2020; color: #ccc; border: none; border-radius: 4px;
     padding: 6px 10px; cursor: pointer; font-size: 0.9em;
@@ -75,8 +80,8 @@
   #add-btn:hover { background: #1a4a3e; color: #eee; }
 
   #bar {
-    position: fixed; bottom: 0; left: 0; height: 3px;
-    background: #e94560; z-index: 5; transition: width 1s linear;
+    position: fixed; bottom: 0; left: 0; width: 0%; height: 3px;
+    background: #e94560; z-index: 9999;
   }
 
   #toast {
@@ -107,12 +112,7 @@
     <option value="-90">-90 (counter-clockwise)</option>
   </select>
 
-  <label style="margin-top:14px">
-    <input type="checkbox" id="use-proxy" checked>
-    Use proxy (fixes sites that block iframes)
-  </label>
-
-  <label>Pages</label>
+  <label>Pages <span style="font-size:0.75em;color:#666">(check P to proxy sites that block iframes)</span></label>
   <div id="entries"></div>
   <button type="button" id="add-btn">+ Add page</button>
 
@@ -151,13 +151,13 @@
   }
 
   // --- Entry management ---
-  function createEntry(url, mins) {
+  function createEntry(url, mins, proxy) {
     var row = document.createElement('div');
     row.className = 'entry';
 
     var urlInput = document.createElement('input');
-    urlInput.type = 'url';
-    urlInput.placeholder = 'https://example.com';
+    urlInput.type = 'text';
+    urlInput.placeholder = 'example.com';
     urlInput.value = url;
 
     var minsInput = document.createElement('input');
@@ -169,6 +169,15 @@
 
     var minLabel = document.createTextNode(' min ');
 
+    var proxyLabel = document.createElement('label');
+    proxyLabel.className = 'proxy-label';
+    var proxyCb = document.createElement('input');
+    proxyCb.type = 'checkbox';
+    proxyCb.checked = !!proxy;
+    proxyCb.title = 'Proxy this site (strips iframe-blocking headers)';
+    proxyLabel.appendChild(proxyCb);
+    proxyLabel.appendChild(document.createTextNode(' P'));
+
     var removeBtn = document.createElement('button');
     removeBtn.className = 'remove-btn';
     removeBtn.title = 'Remove';
@@ -178,6 +187,7 @@
     row.appendChild(urlInput);
     row.appendChild(minsInput);
     row.appendChild(minLabel);
+    row.appendChild(proxyLabel);
     row.appendChild(removeBtn);
     document.getElementById('entries').appendChild(row);
   }
@@ -186,16 +196,19 @@
     var rows = document.querySelectorAll('.entry');
     return Array.from(rows).map(function(r) {
       return {
-        url: r.querySelector('input[type=url]').value.trim(),
-        mins: parseFloat(r.querySelector('input[type=number]').value) || 5
+        url: r.querySelector('input[type=text]').value.trim(),
+        mins: parseFloat(r.querySelector('input[type=number]').value) || 5,
+        proxy: r.querySelector('.proxy-label input[type=checkbox]').checked
       };
+    }).map(function(e) {
+      if (e.url && !/^https?:\/\//i.test(e.url)) e.url = 'https://' + e.url;
+      return e;
     }).filter(function(e) { return e.url; });
   }
 
   function getConfig() {
     return {
       rotation: document.getElementById('rotation').value,
-      useProxy: document.getElementById('use-proxy').checked,
       pages: readEntries()
     };
   }
@@ -217,11 +230,10 @@
 
   function applyToForm(data) {
     if (data.rotation) document.getElementById('rotation').value = data.rotation;
-    if (typeof data.useProxy === 'boolean') document.getElementById('use-proxy').checked = data.useProxy;
     // Clear existing entries
     document.getElementById('entries').textContent = '';
     if (data.pages && data.pages.length) {
-      data.pages.forEach(function(p) { createEntry(p.url, p.mins); });
+      data.pages.forEach(function(p) { createEntry(p.url, p.mins, p.proxy); });
     }
   }
 
@@ -256,11 +268,15 @@
   }
 
   // --- Local preview ---
-  function frameSrc(url) {
-    var useProxy = document.getElementById('use-proxy').checked;
-    var isLocal = loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
-    if (useProxy && !isLocal) {
-      return '/proxy?url=' + encodeURIComponent(url);
+  function frameSrc(url, useProxy) {
+    if (useProxy) {
+      var proxyUrl = '/proxy?url=' + encodeURIComponent(url);
+      // Forward original query params so the page's JS can detect them
+      try {
+        var q = new URL(url).search;
+        if (q) proxyUrl += '&' + q.substring(1);
+      } catch(e) {}
+      return proxyUrl;
     }
     return url;
   }
@@ -280,16 +296,15 @@
 
   function show() {
     var page = pages[idx];
-    document.getElementById('frame').src = frameSrc(page.url);
+    document.getElementById('frame').src = frameSrc(page.url, page.proxy);
     var ms = page.mins * 60000;
 
     var bar = document.getElementById('bar');
     bar.style.transition = 'none';
     bar.style.width = '0%';
-    requestAnimationFrame(function() {
-      bar.style.transition = 'width ' + ms + 'ms linear';
-      bar.style.width = '100%';
-    });
+    bar.offsetWidth; // force reflow
+    bar.style.transition = 'width ' + ms + 'ms linear';
+    bar.style.width = '100%';
 
     clearTimeout(timer);
     timer = setTimeout(function() {
@@ -322,17 +337,17 @@
   });
 
   // --- Buttons ---
-  document.getElementById('add-btn').addEventListener('click', function() { createEntry('', 0.25); });
+  document.getElementById('add-btn').addEventListener('click', function() { createEntry('', 0.25, false); });
   document.getElementById('push-btn').addEventListener('click', pushToDisplay);
   document.getElementById('preview-btn').addEventListener('click', preview);
 
   // --- Init ---
   // Try loading from remote first, fall back to localStorage, then defaults
   if (!loadLocal()) {
-    createEntry('https://thewolfondchair.ca/wolfond-report-2024-2026.html?kiosk', 0.25);
-    createEntry('https://humanfactors.ca', 0.25);
-    createEntry('https://centrefordigitaltherapeutics.ca', 0.25);
-    createEntry('https://www.uhn.ca', 0.25);
+    createEntry('https://thewolfondchair.ca/wolfond-report-2024-2026.html?kiosk', 0.25, false);
+    createEntry('https://humanfactors.ca', 0.25, false);
+    createEntry('https://centrefordigitaltherapeutics.ca', 0.25, true);
+    createEntry('https://www.uhn.ca', 0.25, true);
   }
   fetchRemoteConfig();
 </script>

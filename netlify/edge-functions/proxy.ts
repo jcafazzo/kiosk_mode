@@ -14,8 +14,23 @@ export default async function handler(request: Request) {
   }
 
   try {
+    // Forward standard browser headers so the target site serves a real page
+    const fwdHeaders: Record<string, string> = {};
+    const forward = [
+      "user-agent", "accept", "accept-language", "accept-encoding",
+      "cache-control", "pragma",
+    ];
+    for (const name of forward) {
+      const val = request.headers.get(name);
+      if (val) fwdHeaders[name] = val;
+    }
+    // Ensure a sensible Accept header
+    if (!fwdHeaders["accept"]) {
+      fwdHeaders["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+    }
+
     const response = await fetch(targetUrl, {
-      headers: { "User-Agent": request.headers.get("user-agent") || "" },
+      headers: fwdHeaders,
       redirect: "follow",
     });
 

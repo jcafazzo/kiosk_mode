@@ -17,8 +17,8 @@
   #frame.rot0   { width: 100vw; height: 100vh; transform: translate(-50%, -50%); }
 
   #bar {
-    position: fixed; bottom: 0; left: 0; height: 3px;
-    background: #e94560; z-index: 5; transition: width 1s linear;
+    position: fixed; bottom: 0; left: 0; width: 0%; height: 3px;
+    background: #e94560; z-index: 9999;
   }
 
   #waiting {
@@ -41,7 +41,8 @@
 <div id="bar"></div>
 
 <script>
-  var pages = [], idx = 0, timer = null, rotation = '0', useProxy = true;
+  var CACHE_KEY = 'kiosk_display_config';
+  var pages = [], idx = 0, timer = null, rotation = '0';
   var POLL_MS = 30000;
   var configHash = '';
 
@@ -49,10 +50,15 @@
   var loc = window.location;
   document.getElementById('remote-url').textContent = loc.protocol + '//' + loc.host + '/';
 
-  function frameSrc(url) {
-    var isLocal = loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
-    if (useProxy && !isLocal) {
-      return '/proxy?url=' + encodeURIComponent(url);
+  function frameSrc(url, useProxy) {
+    if (useProxy) {
+      var proxyUrl = '/proxy?url=' + encodeURIComponent(url);
+      // Forward original query params so the page's JS can detect them
+      try {
+        var q = new URL(url).search;
+        if (q) proxyUrl += '&' + q.substring(1);
+      } catch(e) {}
+      return proxyUrl;
     }
     return url;
   }
@@ -64,17 +70,16 @@
     var page = pages[idx];
     var frame = document.getElementById('frame');
     frame.className = 'rot' + rotation;
-    frame.src = frameSrc(page.url);
+    frame.src = frameSrc(page.url, page.proxy);
 
     var ms = page.mins * 60000;
 
     var bar = document.getElementById('bar');
     bar.style.transition = 'none';
     bar.style.width = '0%';
-    requestAnimationFrame(function() {
-      bar.style.transition = 'width ' + ms + 'ms linear';
-      bar.style.width = '100%';
-    });
+    bar.offsetWidth; // force reflow
+    bar.style.transition = 'width ' + ms + 'ms linear';
+    bar.style.width = '100%';
 
     clearTimeout(timer);
     timer = setTimeout(function() {
@@ -83,7 +88,7 @@
     }, ms);
   }
 
-  function applyConfig(data) {
+  function applyConfig(data, save) {
     if (!data || !data.pages || !data.pages.length) return;
 
     // Only restart if config actually changed
@@ -91,22 +96,35 @@
     if (hash === configHash) return;
     configHash = hash;
 
+    // Cache to localStorage
+    if (save) {
+      try { localStorage.setItem(CACHE_KEY, hash); } catch(e) {}
+    }
+
     pages = data.pages;
     rotation = data.rotation || '0';
-    useProxy = data.useProxy !== false;
     idx = 0;
     clearTimeout(timer);
     show();
   }
 
+  function loadCachedConfig() {
+    try {
+      var raw = localStorage.getItem(CACHE_KEY);
+      if (raw) { applyConfig(JSON.parse(raw), false); return true; }
+    } catch(e) {}
+    return false;
+  }
+
   function fetchConfig() {
     fetch('/api/config')
       .then(function(r) { return r.json(); })
-      .then(applyConfig)
+      .then(function(data) { applyConfig(data, true); })
       .catch(function(err) { console.log('Config fetch error:', err); });
   }
 
-  // Initial fetch + poll
+  // Load cached config immediately, then poll API for updates
+  loadCachedConfig();
   fetchConfig();
   setInterval(fetchConfig, POLL_MS);
 </script>
