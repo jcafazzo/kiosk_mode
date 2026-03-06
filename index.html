@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Portrait Kiosk</title>
+<title>Portrait Kiosk - Remote</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; }
@@ -10,12 +10,11 @@
   #frame {
     position: absolute;
     top: 50%; left: 50%;
-    width: 100vh; height: 100vw;
     border: none;
   }
-  #frame.rot90  { transform: translate(-50%, -50%) rotate(90deg); }
-  #frame.rot-90 { transform: translate(-50%, -50%) rotate(-90deg); }
-  #frame.rot0   { transform: translate(-50%, -50%); width: 100vw; height: 100vh; }
+  #frame.rot90  { width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
+  #frame.rot-90 { width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(-90deg); }
+  #frame.rot0   { width: 100vw; height: 100vh; transform: translate(-50%, -50%); }
 
   #config {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -30,15 +29,29 @@
     background: #16213e; color: #eee; border: 1px solid #444;
     border-radius: 4px; padding: 6px 10px; font-size: 1em;
   }
-  #config select { width: 160px; }
+  #config select { width: 200px; }
   #config input[type=number] { width: 80px; }
-  #config button {
+
+  .btn {
     margin-top: 20px; padding: 10px 28px;
-    background: #0f3460; color: #eee; border: none;
+    color: #eee; border: none;
     border-radius: 4px; font-size: 1em; cursor: pointer;
   }
-  #config button:hover { background: #1a5276; }
+  .btn-primary { background: #0f3460; }
+  .btn-primary:hover { background: #1a5276; }
+  .btn-push { background: #1a6030; }
+  .btn-push:hover { background: #1a7a3a; }
+
   .hint { font-size: 0.8em; color: #666; margin-top: 4px; }
+
+  .display-link {
+    margin-top: 20px; padding: 14px 18px;
+    background: #16213e; border: 1px solid #333;
+    border-radius: 6px; max-width: 700px;
+  }
+  .display-link strong { color: #aaa; font-size: 0.85em; display: block; margin-bottom: 4px; }
+  .display-link a { color: #4ea8de; font-family: monospace; font-size: 0.95em; }
+  .display-link .note { color: #555; font-size: 0.8em; margin-top: 6px; }
 
   #entries { width: 100%; max-width: 700px; margin-top: 8px; }
   .entry {
@@ -65,19 +78,33 @@
     position: fixed; bottom: 0; left: 0; height: 3px;
     background: #e94560; z-index: 5; transition: width 1s linear;
   }
+
+  #toast {
+    display: none; position: fixed; bottom: 30px; left: 50%;
+    transform: translateX(-50%);
+    background: #1a6030; color: #eee; padding: 10px 24px;
+    border-radius: 6px; font-size: 0.95em; z-index: 20;
+    font-family: system-ui, sans-serif;
+  }
 </style>
 </head>
 <body>
 
 <div id="config">
   <h1>Portrait Kiosk</h1>
-  <p class="subtitle">Rotate web pages and cycle through them on a timer.</p>
+  <p class="subtitle">Configure the kiosk display remotely.</p>
+
+  <div class="display-link">
+    <strong>TV Display URL</strong>
+    <a id="display-url" href="/display" target="_blank">/display</a>
+    <div class="note">Open this URL on your TV or kiosk device. It will auto-update when you push changes.</div>
+  </div>
 
   <label>Rotation</label>
   <select id="rotation">
+    <option value="0">None (landscape)</option>
     <option value="90">+90 (clockwise)</option>
     <option value="-90">-90 (counter-clockwise)</option>
-    <option value="0">None (landscape)</option>
   </select>
 
   <label style="margin-top:14px">
@@ -89,37 +116,60 @@
   <div id="entries"></div>
   <button type="button" id="add-btn">+ Add page</button>
 
-  <p class="hint" style="margin-top:16px">Press <b>Escape</b> or <b>triple-click</b> anywhere to return to this screen.</p>
+  <p class="hint" style="margin-top:16px">
+    <b>Push to Display</b> sends config to the TV.
+    <b>Preview</b> shows it locally (Escape or triple-click to exit).
+  </p>
   <br>
-  <button id="start-btn">Start</button>
+  <button class="btn btn-push" id="push-btn">Push to Display</button>
+  <button class="btn btn-primary" id="preview-btn" style="margin-left:8px">Preview Locally</button>
 </div>
 
 <iframe id="frame"></iframe>
 <div id="bar"></div>
+<div id="toast"></div>
 
 <script>
-  const STORAGE_KEY = 'kiosk_config';
-  let pages = [], idx = 0, timer = null;
+  var STORAGE_KEY = 'kiosk_config';
+  var pages = [], idx = 0, timer = null;
 
+  // --- Display URL ---
+  var loc = window.location;
+  var displayUrl = loc.protocol + '//' + loc.host + '/display';
+  var displayLink = document.getElementById('display-url');
+  displayLink.href = displayUrl;
+  displayLink.textContent = displayUrl;
+
+  // --- Toast ---
+  var toastTimer = null;
+  function showToast(msg) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function() { el.style.display = 'none'; }, 3000);
+  }
+
+  // --- Entry management ---
   function createEntry(url, mins) {
-    const row = document.createElement('div');
+    var row = document.createElement('div');
     row.className = 'entry';
 
-    const urlInput = document.createElement('input');
+    var urlInput = document.createElement('input');
     urlInput.type = 'url';
     urlInput.placeholder = 'https://example.com';
     urlInput.value = url;
 
-    const minsInput = document.createElement('input');
+    var minsInput = document.createElement('input');
     minsInput.type = 'number';
     minsInput.value = mins;
     minsInput.min = '0.1';
     minsInput.step = '0.5';
     minsInput.title = 'Minutes';
 
-    const minLabel = document.createTextNode(' min ');
+    var minLabel = document.createTextNode(' min ');
 
-    const removeBtn = document.createElement('button');
+    var removeBtn = document.createElement('button');
     removeBtn.className = 'remove-btn';
     removeBtn.title = 'Remove';
     removeBtn.textContent = 'X';
@@ -133,7 +183,7 @@
   }
 
   function readEntries() {
-    const rows = document.querySelectorAll('.entry');
+    var rows = document.querySelectorAll('.entry');
     return Array.from(rows).map(function(r) {
       return {
         url: r.querySelector('input[type=url]').value.trim(),
@@ -142,47 +192,87 @@
     }).filter(function(e) { return e.url; });
   }
 
-  function saveConfig() {
-    var data = {
+  function getConfig() {
+    return {
       rotation: document.getElementById('rotation').value,
       useProxy: document.getElementById('use-proxy').checked,
       pages: readEntries()
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }
 
-  function loadConfig() {
+  // --- LocalStorage ---
+  function saveLocal() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(getConfig()));
+  }
+
+  function loadLocal() {
     try {
       var data = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (!data) return false;
-      if (data.rotation) document.getElementById('rotation').value = data.rotation;
-      if (typeof data.useProxy === 'boolean') document.getElementById('use-proxy').checked = data.useProxy;
-      if (data.pages && data.pages.length) {
-        data.pages.forEach(function(p) { createEntry(p.url, p.mins); });
-        return true;
-      }
+      applyToForm(data);
+      return true;
     } catch(e) {}
     return false;
   }
 
+  function applyToForm(data) {
+    if (data.rotation) document.getElementById('rotation').value = data.rotation;
+    if (typeof data.useProxy === 'boolean') document.getElementById('use-proxy').checked = data.useProxy;
+    // Clear existing entries
+    document.getElementById('entries').textContent = '';
+    if (data.pages && data.pages.length) {
+      data.pages.forEach(function(p) { createEntry(p.url, p.mins); });
+    }
+  }
+
+  // --- Remote API ---
+  function pushToDisplay() {
+    var config = getConfig();
+    if (!config.pages.length) return alert('Add at least one page.');
+    saveLocal();
+
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    })
+    .then(function(r) {
+      if (r.ok) showToast('Pushed to display');
+      else showToast('Error pushing config');
+    })
+    .catch(function() { showToast('Network error — are you on Netlify?'); });
+  }
+
+  function fetchRemoteConfig() {
+    fetch('/api/config')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data && data.pages && data.pages.length) {
+          applyToForm(data);
+          saveLocal();
+        }
+      })
+      .catch(function() {}); // Silently fail (e.g., running locally)
+  }
+
+  // --- Local preview ---
   function frameSrc(url) {
     var useProxy = document.getElementById('use-proxy').checked;
-    var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    var isLocal = loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
     if (useProxy && !isLocal) {
       return '/proxy?url=' + encodeURIComponent(url);
     }
     return url;
   }
 
-  function start() {
+  function preview() {
     pages = readEntries();
     if (!pages.length) return alert('Add at least one page.');
-    saveConfig();
+    saveLocal();
     document.getElementById('config').style.display = 'none';
 
     var rot = document.getElementById('rotation').value;
-    var frame = document.getElementById('frame');
-    frame.className = 'rot' + rot;
+    document.getElementById('frame').className = 'rot' + rot;
 
     idx = 0;
     show();
@@ -208,7 +298,7 @@
     }, ms);
   }
 
-  function exitKiosk() {
+  function exitPreview() {
     clearTimeout(timer);
     document.getElementById('config').style.display = '';
     document.getElementById('frame').src = 'about:blank';
@@ -216,32 +306,35 @@
     document.getElementById('bar').style.width = '0%';
   }
 
-  // Exit: Escape key
+  // --- Exit: Escape key ---
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') exitKiosk();
+    if (e.key === 'Escape') exitPreview();
   });
 
-  // Exit: Triple-click
+  // --- Exit: Triple-click ---
   var clickCount = 0, clickTimer = null;
   document.addEventListener('click', function() {
     if (document.getElementById('config').style.display !== 'none') return;
     clickCount++;
     clearTimeout(clickTimer);
-    if (clickCount >= 3) { clickCount = 0; exitKiosk(); return; }
+    if (clickCount >= 3) { clickCount = 0; exitPreview(); return; }
     clickTimer = setTimeout(function() { clickCount = 0; }, 600);
   });
 
-  // Buttons
-  document.getElementById('add-btn').addEventListener('click', function() { createEntry('', 5); });
-  document.getElementById('start-btn').addEventListener('click', start);
+  // --- Buttons ---
+  document.getElementById('add-btn').addEventListener('click', function() { createEntry('', 0.25); });
+  document.getElementById('push-btn').addEventListener('click', pushToDisplay);
+  document.getElementById('preview-btn').addEventListener('click', preview);
 
-  // Init: load from localStorage or show default
-  if (!loadConfig()) {
+  // --- Init ---
+  // Try loading from remote first, fall back to localStorage, then defaults
+  if (!loadLocal()) {
     createEntry('https://thewolfondchair.ca/wolfond-report-2024-2026.html?kiosk', 0.25);
     createEntry('https://humanfactors.ca', 0.25);
     createEntry('https://centrefordigitaltherapeutics.ca', 0.25);
     createEntry('https://www.uhn.ca', 0.25);
   }
+  fetchRemoteConfig();
 </script>
 </body>
 </html>

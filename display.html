@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Kiosk Display</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; }
+
+  #frame {
+    position: absolute;
+    top: 50%; left: 50%;
+    border: none;
+  }
+  #frame.rot90  { width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(90deg); }
+  #frame.rot-90 { width: 100vh; height: 100vw; transform: translate(-50%, -50%) rotate(-90deg); }
+  #frame.rot0   { width: 100vw; height: 100vh; transform: translate(-50%, -50%); }
+
+  #bar {
+    position: fixed; bottom: 0; left: 0; height: 3px;
+    background: #e94560; z-index: 5; transition: width 1s linear;
+  }
+
+  #waiting {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: #444; font-family: system-ui, sans-serif;
+    font-size: 1.2em; text-align: center;
+  }
+  #waiting .url { color: #666; font-size: 0.8em; margin-top: 12px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<div id="waiting">
+  Waiting for configuration...
+  <div class="url">Configure at: <span id="remote-url"></span></div>
+</div>
+
+<iframe id="frame"></iframe>
+<div id="bar"></div>
+
+<script>
+  var pages = [], idx = 0, timer = null, rotation = '0', useProxy = true;
+  var POLL_MS = 30000;
+  var configHash = '';
+
+  // Show the remote URL
+  var loc = window.location;
+  document.getElementById('remote-url').textContent = loc.protocol + '//' + loc.host + '/';
+
+  function frameSrc(url) {
+    var isLocal = loc.hostname === 'localhost' || loc.hostname === '127.0.0.1';
+    if (useProxy && !isLocal) {
+      return '/proxy?url=' + encodeURIComponent(url);
+    }
+    return url;
+  }
+
+  function show() {
+    if (!pages.length) return;
+    document.getElementById('waiting').style.display = 'none';
+
+    var page = pages[idx];
+    var frame = document.getElementById('frame');
+    frame.className = 'rot' + rotation;
+    frame.src = frameSrc(page.url);
+
+    var ms = page.mins * 60000;
+
+    var bar = document.getElementById('bar');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    requestAnimationFrame(function() {
+      bar.style.transition = 'width ' + ms + 'ms linear';
+      bar.style.width = '100%';
+    });
+
+    clearTimeout(timer);
+    timer = setTimeout(function() {
+      idx = (idx + 1) % pages.length;
+      show();
+    }, ms);
+  }
+
+  function applyConfig(data) {
+    if (!data || !data.pages || !data.pages.length) return;
+
+    // Only restart if config actually changed
+    var hash = JSON.stringify(data);
+    if (hash === configHash) return;
+    configHash = hash;
+
+    pages = data.pages;
+    rotation = data.rotation || '0';
+    useProxy = data.useProxy !== false;
+    idx = 0;
+    clearTimeout(timer);
+    show();
+  }
+
+  function fetchConfig() {
+    fetch('/api/config')
+      .then(function(r) { return r.json(); })
+      .then(applyConfig)
+      .catch(function(err) { console.log('Config fetch error:', err); });
+  }
+
+  // Initial fetch + poll
+  fetchConfig();
+  setInterval(fetchConfig, POLL_MS);
+</script>
+</body>
+</html>
